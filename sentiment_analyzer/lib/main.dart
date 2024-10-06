@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/widgets.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:sentiment_analyzer/bloc/sentiment_bloc.dart';
 
 void main() {
   runApp(const MyApp());
@@ -13,10 +14,13 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const MaterialApp(
+    return MaterialApp(
       debugShowCheckedModeBanner: false,
-      home: MyHomePage(
-        title: 'Sentiment Analyzer',
+      home: BlocProvider(
+        create: (context) => SentimentBloc(),
+        child: const MyHomePage(
+          title: 'Sentiment Analyzer',
+        ),
       ),
     );
   }
@@ -34,6 +38,7 @@ class MyHomePage extends StatefulWidget {
 class _MyHomePageState extends State<MyHomePage> {
   late final TextEditingController _controller;
   String sentiment = "";
+
   @override
   void initState() {
     _controller = TextEditingController();
@@ -46,6 +51,7 @@ class _MyHomePageState extends State<MyHomePage> {
     super.dispose();
   }
 
+  bool isloading = false;
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -59,62 +65,80 @@ class _MyHomePageState extends State<MyHomePage> {
         ),
         centerTitle: true,
       ),
-      body: SingleChildScrollView(
-        child: Stack(
-          children: [
-            Padding(
-              padding:
-                  EdgeInsets.only(top: MediaQuery.of(context).size.height * .3),
-              child: Center(
-                child: Text(
-                  sentiment,
-                  style: GoogleFonts.ptSans(
-                      color: Colors.grey.shade800, fontSize: 30),
-                ),
+      floatingActionButton: Container(
+        margin: EdgeInsets.only(left: MediaQuery.of(context).size.width * .06),
+        decoration: BoxDecoration(
+          border: Border.all(color: Colors.grey),
+          borderRadius: BorderRadius.circular(15),
+        ),
+        child: Padding(
+          padding:
+              EdgeInsets.only(left: MediaQuery.of(context).size.width * .02),
+          child: TextFormField(
+            controller: _controller,
+            decoration: InputDecoration(
+              hintText: 'Enter a sentence...',
+              suffixIcon: GestureDetector(
+                child: const Icon(Icons.navigate_next),
+                onTap: () {
+                  String inputText =
+                      _controller.text; // Get the text from the controller
+                  _controller.clear(); // Clear the text field
+                  FocusScope.of(context)
+                      .unfocus(); // Unfocus the text field (closes the keyboard)
+                  context
+                      .read<SentimentBloc>()
+                      .add(LoadingEvent()); // Trigger loading event
+                  getValue(
+                      inputText, context); // Call getValue with the input text
+                },
               ),
             ),
-            Center(
-              child: Container(
-                margin: EdgeInsets.only(
-                    top: MediaQuery.of(context).size.height * .8),
-                height: MediaQuery.of(context).size.height * .06,
-                width: MediaQuery.of(context).size.width * .9,
-                decoration: BoxDecoration(
-                  border: Border.all(color: Colors.grey),
-                  borderRadius: BorderRadius.circular(15),
-                ),
-                child: Padding(
-                  padding: EdgeInsets.only(
-                    left: MediaQuery.of(context).size.width * .02,
-                  ),
-                  child: TextFormField(
-                    controller: _controller,
-                    decoration: InputDecoration(
-                      hintText: 'Enter a sentence...',
-                      suffixIcon: GestureDetector(
-                        child: const Icon(Icons.navigate_next),
-                        onTap: () async {
-                          final result = await getValue(_controller.text);
-                          setState(() {
-                            sentiment = result;
-                          });
-                        },
+          ),
+        ),
+      ),
+      body: BlocBuilder<SentimentBloc, SentimentState>(
+        builder: (context, state) {
+          if (state is LoadingState) {
+            isloading = true;
+          } else if (state is LoadedState) {
+            isloading = false;
+            sentiment = state.text;
+          }
+
+          return SingleChildScrollView(
+            child: Stack(
+              children: [
+                if (isloading == true)
+                  Padding(
+                    padding: EdgeInsets.only(
+                        top: MediaQuery.of(context).size.height * .3),
+                    child: const Center(child: CircularProgressIndicator()),
+                  )
+                else
+                  Padding(
+                    padding: EdgeInsets.only(
+                        top: MediaQuery.of(context).size.height * .3),
+                    child: Center(
+                      child: Text(
+                        sentiment,
+                        style: GoogleFonts.ptSans(
+                            color: Colors.grey.shade800, fontSize: 30),
                       ),
                     ),
                   ),
-                ),
-              ),
+              ],
             ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }
 }
 
-Future<String> getValue(String input) async {
+void getValue(String input, BuildContext ctx) async {
   try {
-    List<dynamic> result = await querySentiment(input);
+    List<dynamic> result = await querySentiment(input, ctx);
     final scores = result[0];
     String label = "";
     double score = 0;
@@ -125,13 +149,16 @@ Future<String> getValue(String input) async {
         label = entery['label'].toString();
       }
     }
-    return "$label ${(score * 100).toStringAsFixed(0)}%";
+    ctx
+        .read<SentimentBloc>()
+        .add(LoadedEvent(text: "$label ${(score * 100).toStringAsFixed(0)}%"));
   } catch (e) {
-    return e.toString();
+    ctx.read<SentimentBloc>().add(LoadedEvent(text: e.toString()));
   }
 }
 
-Future<List<dynamic>> querySentiment(String input) async {
+Future<List<dynamic>> querySentiment(String input, BuildContext ctx) async {
+  ctx.read<SentimentBloc>().add(LoadingEvent());
   const String apiUrl =
       "https://api-inference.huggingface.co/models/lxyuan/distilbert-base-multilingual-cased-sentiments-student";
   const String token =
